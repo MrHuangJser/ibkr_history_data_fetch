@@ -1,16 +1,43 @@
 {
-  "name": "ibkr_history_data_fetch",
-  "module": "index.ts",
+  "name": "ibkr-history-fetch",
+  "version": "2.0.0",
+  "description": "Interactive Brokers历史数据获取工具 - 支持MES期货合约1分钟级数据获取，具备断点续传功能",
+  "main": "dist/index.js",
+  "module": "src/index.ts",
   "type": "module",
   "private": true,
-  "scripts": {
-    "start": "bun run src/example.ts",
-    "fetch-mes": "bun run src/example.ts",
-    "build": "bun build src/history/index.ts --outdir dist --target bun",
-    "lint": "echo 'No linter configured'"
+  "bin": {
+    "ibkr-history-fetch": "./dist/index.js"
   },
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "dev": "bun run src/index.ts",
+    "build": "bun build src/index.ts --outdir dist --target bun --minify",
+    "build:history": "bun build src/history/index.ts --outdir dist --target bun",
+    "example": "bun run src/example.ts",
+    "mes": "bun run src/index.ts mes",
+    "status": "bun run src/index.ts status",
+    "reset": "bun run src/index.ts reset --force",
+    "config": "bun run src/index.ts config",
+    "help": "bun run src/index.ts help",
+    "lint": "echo 'No linter configured'",
+    "clean": "rm -rf dist fetch_metadata.json *.csv"
+  },
+  "keywords": [
+    "ibkr",
+    "interactive-brokers",
+    "historical-data",
+    "mes",
+    "futures",
+    "trading",
+    "finance",
+    "cli"
+  ],
+  "author": "IBKR History Fetch Tool",
+  "license": "MIT",
   "devDependencies": {
-    "@types/bun": "latest"
+    "@types/bun": "latest",
+    "@types/node": "^24.3.0"
   },
   "peerDependencies": {
     "typescript": "^5"
@@ -18,6 +45,7 @@
   "dependencies": {
     "@stoqey/ib": "^1.5.1",
     "@stoqey/ibkr": "^2.2.14",
+    "commander": "^14.0.0",
     "dayjs": "^1.11.18",
     "rxjs": "^7.8.2"
   }

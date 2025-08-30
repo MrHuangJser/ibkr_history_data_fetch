@@ -12,8 +12,8 @@ import {
   tap,
   timer,
 } from "rxjs";
-import { mergeConfig, type MESFetcherConfig } from "../config.js";
-import { MetadataManager, type ContractProgress } from "../metadata.js";
+import { mergeConfig, type MESFetcherConfig } from "./config.js";
+import { MetadataManager, type ContractProgress } from "./metadata.js";
 
 interface ContractInfo {
   conId: number;
@@ -180,10 +180,16 @@ export class MESHistoricalDataFetcher {
 
         if (data.length > 0) {
           // 立即保存数据到CSV
-          await this.appendDataToCSV(data, request.contract, contractProgress.csvFilePath);
-          
+          await this.appendDataToCSV(
+            data,
+            request.contract,
+            contractProgress.csvFilePath
+          );
+
           // 更新元数据
-          const oldestDataTime = data[0]?.date ? String(data[0].date) : request.endDateTime;
+          const oldestDataTime = data[0]?.date
+            ? String(data[0].date)
+            : request.endDateTime;
           await this.metadataManager.updateContractProgress(
             request.contract.conId!,
             oldestDataTime,
@@ -213,24 +219,26 @@ export class MESHistoricalDataFetcher {
   ): Promise<void> {
     if (data.length === 0) return;
 
-    const symbol = contract.localSymbol || contract.symbol || 'MES';
-    
+    const symbol = contract.localSymbol || contract.symbol || "MES";
+
     // 按时间排序（从旧到新）
-    const sortedData = data.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+    const sortedData = data.sort(
+      (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()
+    );
 
     // 检查文件是否存在，如果不存在则创建并写入表头
     const file = Bun.file(csvFilePath);
     const fileExists = await file.exists();
-    
-    let csvContent = '';
-    
+
+    let csvContent = "";
+
     if (!fileExists) {
       // 写入CSV表头
       csvContent += "symbol,date,open,high,low,close,volume,count,wap\n";
     }
 
     // 添加数据行
-    const csvRows = sortedData.map(item => {
+    const csvRows = sortedData.map((item) => {
       return [
         symbol,
         item.date,
@@ -244,7 +252,7 @@ export class MESHistoricalDataFetcher {
       ].join(this.config.output.csvSeparator);
     });
 
-    csvContent += csvRows.join('\n') + '\n';
+    csvContent += csvRows.join("\n") + "\n";
 
     try {
       // 追加写入文件
@@ -254,7 +262,7 @@ export class MESHistoricalDataFetcher {
       } else {
         await Bun.write(csvFilePath, csvContent);
       }
-      
+
       console.log(`💾 已保存 ${data.length} 条数据到 ${csvFilePath}`);
     } catch (error) {
       console.error(`❌ 保存数据失败:`, error);
@@ -266,12 +274,15 @@ export class MESHistoricalDataFetcher {
    * 获取所有MES合约的1分钟级历史数据（支持断点续传）
    * 使用RxJS实现流控制
    */
-  fetchAllMESHistoricalData(): Observable<{ success: boolean; recordCount: number }> {
+  fetchAllMESHistoricalData(): Observable<{
+    success: boolean;
+    recordCount: number;
+  }> {
     return from(this.initializeContracts()).pipe(
       // 展开待处理的请求
       mergeMap((pendingRequests) => {
         console.log(`📋 总共需要处理 ${pendingRequests.length} 个数据请求`);
-        
+
         if (pendingRequests.length === 0) {
           console.log("✅ 所有合约数据已获取完成！");
           return EMPTY;
@@ -284,9 +295,14 @@ export class MESHistoricalDataFetcher {
       concatMap((item, index) => {
         return timer(index * this.REQUEST_INTERVAL_MS).pipe(
           mergeMap(() =>
-            this.executeHistoricalDataRequest(item.request, item.contractProgress).pipe(
+            this.executeHistoricalDataRequest(
+              item.request,
+              item.contractProgress
+            ).pipe(
               tap((result) => {
-                console.log(`⏳ 进度: ${index + 1}/${item.totalRequests} 个请求完成`);
+                console.log(
+                  `⏳ 进度: ${index + 1}/${item.totalRequests} 个请求完成`
+                );
               })
             )
           )
@@ -298,11 +314,13 @@ export class MESHistoricalDataFetcher {
   /**
    * 初始化合约和生成待处理的请求列表
    */
-  private async initializeContracts(): Promise<Array<{
-    contractProgress: ContractProgress;
-    request: HistoricalDataRequest;
-    totalRequests: number;
-  }>> {
+  private async initializeContracts(): Promise<
+    Array<{
+      contractProgress: ContractProgress;
+      request: HistoricalDataRequest;
+      totalRequests: number;
+    }>
+  > {
     // 获取所有MES合约
     const contracts = await this.getPastContracts();
     console.log(`🔍 找到 ${contracts.length} 个MES合约`);
@@ -323,13 +341,15 @@ export class MESHistoricalDataFetcher {
       );
 
       // 生成CSV文件路径
-      const timestamp = dayjs().format('YYYYMMDD');
+      const timestamp = dayjs().format("YYYYMMDD");
       const csvFilePath = `${this.config.output.filenamePrefix}_${contractInfo.contract.localSymbol}_${timestamp}.csv`;
 
       // 初始化合约进度
       const contractProgress = this.metadataManager.initContractProgress(
         contractInfo.conId,
-        contractInfo.contract.localSymbol || contractInfo.contract.symbol || 'MES',
+        contractInfo.contract.localSymbol ||
+          contractInfo.contract.symbol ||
+          "MES",
         contractInfo.expiry,
         dayjs(yearsAgo).toISOString(),
         csvFilePath
@@ -342,13 +362,17 @@ export class MESHistoricalDataFetcher {
       }
 
       // 生成待处理的请求
-      const pendingRequests = this.generatePendingRequests(contractInfo, contractProgress, yearsAgo);
-      
-      pendingRequests.forEach(request => {
+      const pendingRequests = this.generatePendingRequests(
+        contractInfo,
+        contractProgress,
+        yearsAgo
+      );
+
+      pendingRequests.forEach((request) => {
         allPendingRequests.push({
           contractProgress,
           request,
-          totalRequests: pendingRequests.length
+          totalRequests: pendingRequests.length,
         });
       });
     }
@@ -368,7 +392,7 @@ export class MESHistoricalDataFetcher {
     targetStartDate: Date
   ): HistoricalDataRequest[] {
     const requests: HistoricalDataRequest[] = [];
-    
+
     // 从元数据中获取下一个请求时间点
     let currentEndDateTime = this.metadataManager.getNextFetchDateTime(
       contractInfo.conId,
@@ -383,13 +407,15 @@ export class MESHistoricalDataFetcher {
     let currentEnd = dayjs(currentEndDateTime);
     const targetStart = dayjs(targetStartDate);
 
-    console.log(`🔄 合约 ${contractProgress.symbol} 从 ${currentEndDateTime} 继续获取数据`);
+    console.log(
+      `🔄 合约 ${contractProgress.symbol} 从 ${currentEndDateTime} 继续获取数据`
+    );
 
     // 生成请求序列
     while (currentEnd.isAfter(targetStart)) {
       const durationDays = this.config.dataFetch.maxDurationDays;
-      const requestStart = currentEnd.subtract(durationDays, 'day');
-      
+      const requestStart = currentEnd.subtract(durationDays, "day");
+
       requests.push({
         contract: contractInfo.contract,
         endDateTime: currentEnd.format("YYYYMMDD HH:mm:ss"),
@@ -399,7 +425,9 @@ export class MESHistoricalDataFetcher {
       currentEnd = requestStart;
     }
 
-    console.log(`📊 合约 ${contractProgress.symbol} 生成 ${requests.length} 个待处理请求`);
+    console.log(
+      `📊 合约 ${contractProgress.symbol} 生成 ${requests.length} 个待处理请求`
+    );
     return requests;
   }
 
@@ -435,9 +463,11 @@ export class MESHistoricalDataFetcher {
         next: (result) => {
           completedRequests++;
           totalRecords += result.recordCount;
-          
+
           if (result.success) {
-            console.log(`📈 成功处理第 ${completedRequests} 个请求，获取 ${result.recordCount} 条记录`);
+            console.log(
+              `📈 成功处理第 ${completedRequests} 个请求，获取 ${result.recordCount} 条记录`
+            );
           } else {
             console.log(`⚠️ 第 ${completedRequests} 个请求失败`);
           }
@@ -451,7 +481,7 @@ export class MESHistoricalDataFetcher {
           console.log(`📊 统计信息:`);
           console.log(`   - 处理请求: ${completedRequests} 个`);
           console.log(`   - 获取记录: ${totalRecords} 条`);
-          
+
           // 显示最终统计
           const finalStats = this.metadataManager.getStatistics();
           console.log(`📋 最终状态:`);
@@ -459,9 +489,11 @@ export class MESHistoricalDataFetcher {
           console.log(`   - 已完成: ${finalStats.completedContracts}`);
           console.log(`   - 待处理: ${finalStats.pendingContracts}`);
           console.log(`   - 总记录数: ${finalStats.totalRecords}`);
-          
+
           if (finalStats.pendingContracts > 0) {
-            console.log(`⚠️ 还有 ${finalStats.pendingContracts} 个合约未完成，可重新运行程序继续获取`);
+            console.log(
+              `⚠️ 还有 ${finalStats.pendingContracts} 个合约未完成，可重新运行程序继续获取`
+            );
           }
 
           resolve();
