@@ -1,0 +1,16 @@
+{
+  "name": "ibkr_history_data_fetch",
+  "module": "index.ts",
+  "type": "module",
+  "private": true,
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "@stoqey/ib": "^1.5.1",
+    "@stoqey/ibkr": "^2.2.14"
+  }
+}
