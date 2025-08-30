@@ -202,13 +202,17 @@ export class MetadataManager {
     const lastFetched = dayjs(progress.lastFetchedDateTime);
     const targetStart = dayjs(progress.targetStartDateTime);
     
-    if (lastFetched.isBefore(targetStart)) {
-      return null; // 已完成
+    // 检查是否已经到达目标开始时间
+    if (lastFetched.isBefore(targetStart) || lastFetched.isSame(targetStart)) {
+      // 标记为完成
+      progress.completed = true;
+      console.log(`✅ 合约 ${progress.symbol} 已到达目标时间，标记为完成`);
+      return null;
     }
 
     // 计算下一个请求的结束时间（向前回溯）
-    const nextEnd = lastFetched.subtract(1, 'minute'); // 避免重复数据
-    return nextEnd.format("YYYYMMDD HH:mm:ss");
+    // 使用当前lastFetchedDateTime作为下次请求的结束时间
+    return lastFetched.format("YYYYMMDD HH:mm:ss");
   }
 
   /**

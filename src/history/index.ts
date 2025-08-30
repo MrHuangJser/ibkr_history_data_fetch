@@ -1,6 +1,7 @@
 import { BarSizeSetting, SecType, WhatToShow, type Contract } from "@stoqey/ib";
 import { MarketDataManager, type MarketData } from "@stoqey/ibkr";
 import dayjs from "dayjs";
+import utc from "dayjs/plugin/utc.js";
 import {
   EMPTY,
   Observable,
@@ -14,6 +15,9 @@ import {
 } from "rxjs";
 import { mergeConfig, type MESFetcherConfig } from "./config.js";
 import { MetadataManager, type ContractProgress } from "./metadata.js";
+
+// 扩展dayjs以支持UTC偏移
+dayjs.extend(utc);
 
 interface ContractInfo {
   conId: number;
@@ -117,39 +121,8 @@ export class MESHistoricalDataFetcher {
       return true;
     });
 
-    // 升序排序
-    return deduped.sort((a, b) => a.expiry!.getTime() - b.expiry!.getTime());
-  }
-
-  /**
-   * 为单个合约生成历史数据请求序列
-   * 从当前时间向前回溯，每次请求7天数据
-   */
-  private generateRequestsForContract(
-    contract: Contract,
-    startDate: Date,
-    endDate: Date = new Date()
-  ): HistoricalDataRequest[] {
-    const requests: HistoricalDataRequest[] = [];
-    let currentEnd = endDate;
-
-    while (currentEnd > startDate) {
-      const daysBefore = new Date(
-        currentEnd.getTime() -
-          this.config.dataFetch.maxDurationDays * 24 * 60 * 60 * 1000
-      );
-      const actualStart = daysBefore > startDate ? daysBefore : startDate;
-
-      requests.push({
-        contract,
-        endDateTime: dayjs(currentEnd).format("YYYYMMDD HH:mm:ss"),
-        durationStr: `${this.config.dataFetch.maxDurationDays} D`,
-      });
-
-      currentEnd = actualStart;
-    }
-
-    return requests;
+    // 降序排序
+    return deduped.sort((a, b) => b.expiry!.getTime() - a.expiry!.getTime());
   }
 
   /**
@@ -186,14 +159,39 @@ export class MESHistoricalDataFetcher {
             contractProgress.csvFilePath
           );
 
-          // 更新元数据
-          const oldestDataTime = data[0]?.date
-            ? String(data[0].date)
+          // 更新元数据 - 使用数据中最早的时间点
+          // 按时间排序找到最早的数据点
+          const sortedData = data.sort(
+            (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()
+          );
+          const oldestDataTime = sortedData[0]?.date
+            ? String(sortedData[0].date)
             : request.endDateTime;
+
           await this.metadataManager.updateContractProgress(
             request.contract.conId!,
             oldestDataTime,
             data.length
+          );
+        } else {
+          // 如果没有获取到数据，说明这个时间段没有数据，需要向前推进时间点
+          // 向前推进一个请求周期的时间
+          const currentEndTime = dayjs(request.endDateTime);
+          const nextEndTime = currentEndTime.subtract(
+            this.config.dataFetch.maxDurationDays,
+            "day"
+          );
+
+          await this.metadataManager.updateContractProgress(
+            request.contract.conId!,
+            nextEndTime.toISOString(),
+            0
+          );
+
+          console.log(
+            `⚠️ ${request.contract.localSymbol} 在 ${
+              request.endDateTime
+            } 时间段无数据，跳过到 ${nextEndTime.format("YYYYMMDD HH:mm:ss")}`
           );
         }
 
@@ -223,7 +221,7 @@ export class MESHistoricalDataFetcher {
 
     // 按时间排序（从旧到新）
     const sortedData = data.sort(
-      (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()
+      (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
     );
 
     // 检查文件是否存在，如果不存在则创建并写入表头
@@ -239,9 +237,14 @@ export class MESHistoricalDataFetcher {
 
     // 添加数据行
     const csvRows = sortedData.map((item) => {
+      // 格式化日期为UTC+8时区的 YYYY-MM-DD HH:mm:ss 格式
+      const formattedDate = dayjs(item.date)
+        .utcOffset(8)
+        .format("YYYY-MM-DD HH:mm:ss");
+
       return [
         symbol,
-        item.date,
+        formattedDate,
         item.open,
         item.high,
         item.low,
@@ -288,7 +291,14 @@ export class MESHistoricalDataFetcher {
           return EMPTY;
         }
 
-        return from(pendingRequests);
+        // 为每个请求添加全局总数信息
+        const requestsWithGlobalTotal = pendingRequests.map((item, index) => ({
+          ...item,
+          globalIndex: index + 1,
+          globalTotal: pendingRequests.length,
+        }));
+
+        return from(requestsWithGlobalTotal);
       }),
 
       // 实现流控制：每秒最多1个请求
@@ -299,9 +309,9 @@ export class MESHistoricalDataFetcher {
               item.request,
               item.contractProgress
             ).pipe(
-              tap((result) => {
+              tap(() => {
                 console.log(
-                  `⏳ 进度: ${index + 1}/${item.totalRequests} 个请求完成`
+                  `⏳ 进度: ${item.globalIndex}/${item.globalTotal} 个请求完成 (合约: ${item.contractProgress.symbol})`
                 );
               })
             )
@@ -318,7 +328,7 @@ export class MESHistoricalDataFetcher {
     Array<{
       contractProgress: ContractProgress;
       request: HistoricalDataRequest;
-      totalRequests: number;
+      contractRequests: number;
     }>
   > {
     // 获取所有MES合约
@@ -328,7 +338,7 @@ export class MESHistoricalDataFetcher {
     const allPendingRequests: Array<{
       contractProgress: ContractProgress;
       request: HistoricalDataRequest;
-      totalRequests: number;
+      contractRequests: number;
     }> = [];
 
     // 为每个合约初始化进度和生成请求
@@ -372,7 +382,7 @@ export class MESHistoricalDataFetcher {
         allPendingRequests.push({
           contractProgress,
           request,
-          totalRequests: pendingRequests.length,
+          contractRequests: pendingRequests.length,
         });
       });
     }
@@ -392,6 +402,7 @@ export class MESHistoricalDataFetcher {
     targetStartDate: Date
   ): HistoricalDataRequest[] {
     const requests: HistoricalDataRequest[] = [];
+    const MAX_REQUESTS_PER_CONTRACT = 200; // 安全限制：每个合约最多200个请求
 
     // 从元数据中获取下一个请求时间点
     let currentEndDateTime = this.metadataManager.getNextFetchDateTime(
@@ -411,8 +422,12 @@ export class MESHistoricalDataFetcher {
       `🔄 合约 ${contractProgress.symbol} 从 ${currentEndDateTime} 继续获取数据`
     );
 
-    // 生成请求序列
-    while (currentEnd.isAfter(targetStart)) {
+    // 生成请求序列，添加安全限制
+    let requestCount = 0;
+    while (
+      currentEnd.isAfter(targetStart) &&
+      requestCount < MAX_REQUESTS_PER_CONTRACT
+    ) {
       const durationDays = this.config.dataFetch.maxDurationDays;
       const requestStart = currentEnd.subtract(durationDays, "day");
 
@@ -423,6 +438,13 @@ export class MESHistoricalDataFetcher {
       });
 
       currentEnd = requestStart;
+      requestCount++;
+    }
+
+    if (requestCount >= MAX_REQUESTS_PER_CONTRACT) {
+      console.log(
+        `⚠️ 合约 ${contractProgress.symbol} 达到最大请求数限制 (${MAX_REQUESTS_PER_CONTRACT})，可能需要检查时间范围设置`
+      );
     }
 
     console.log(
@@ -454,7 +476,6 @@ export class MESHistoricalDataFetcher {
       console.log(`   - 已获取记录: ${stats.totalRecords}`);
     }
 
-    let totalRequests = 0;
     let completedRequests = 0;
     let totalRecords = 0;
 
@@ -517,10 +538,4 @@ export async function fetchMESHistoricalData(
 ): Promise<void> {
   const fetcher = new MESHistoricalDataFetcher(config);
   await fetcher.startFetching();
-}
-
-// 保持原有的函数以兼容现有代码
-async function getPastContracts() {
-  const fetcher = new MESHistoricalDataFetcher();
-  return await fetcher.getPastContracts();
 }
