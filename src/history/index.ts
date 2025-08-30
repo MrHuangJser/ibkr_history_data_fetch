@@ -23,6 +23,7 @@ interface ContractInfo {
   conId: number;
   expiryStr: string;
   expiry: Date;
+  startDate: Date; // 合约开始时间
   contract: Contract;
 }
 
@@ -66,6 +67,67 @@ export class MESHistoricalDataFetcher {
     );
 
     // 恢复信息将在startFetching中显示
+  }
+
+  /**
+   * 计算每个合约的开始时间
+   * 通过分析合约列表的时间序列来推算实际的交易开始时间
+   */
+  private calculateContractStartDates(
+    contracts: Array<{
+      conId: number;
+      expiryStr: string;
+      expiry: Date;
+      contract: Contract;
+    }>
+  ): ContractInfo[] {
+    // 按到期时间排序（从早到晚）
+    const sortedContracts = contracts.sort(
+      (a, b) => a.expiry.getTime() - b.expiry.getTime()
+    );
+
+    const contractsWithStartDates: ContractInfo[] = [];
+
+    for (let i = 0; i < sortedContracts.length; i++) {
+      const currentContract = sortedContracts[i];
+      if (!currentContract) continue;
+
+      let startDate: Date;
+
+      if (i === 0) {
+        // 第一个合约：假设在到期前3个月开始交易
+        startDate = new Date(currentContract.expiry);
+        startDate.setMonth(startDate.getMonth() - 3);
+      } else {
+        // 后续合约：从前一个合约到期时开始交易
+        const previousContract = sortedContracts[i - 1];
+        if (!previousContract) {
+          // 如果前一个合约不存在，回退到默认逻辑
+          startDate = new Date(currentContract.expiry);
+          startDate.setMonth(startDate.getMonth() - 3);
+        } else {
+          startDate = new Date(previousContract.expiry);
+        }
+      }
+
+      contractsWithStartDates.push({
+        conId: currentContract.conId,
+        expiryStr: currentContract.expiryStr,
+        expiry: currentContract.expiry,
+        startDate: startDate,
+        contract: currentContract.contract,
+      });
+
+      console.log(
+        `📅 合约 ${currentContract.contract.localSymbol}: ${dayjs(
+          startDate
+        ).format("YYYY-MM-DD")} → ${dayjs(currentContract.expiry).format(
+          "YYYY-MM-DD"
+        )}`
+      );
+    }
+
+    return contractsWithStartDates;
   }
 
   /**
@@ -121,8 +183,13 @@ export class MESHistoricalDataFetcher {
       return true;
     });
 
-    // 降序排序
-    return deduped.sort((a, b) => b.expiry!.getTime() - a.expiry!.getTime());
+    // 通过分析合约序列计算每个合约的开始时间
+    const contractsWithStartDates = this.calculateContractStartDates(deduped);
+
+    // 按到期时间降序排序（最新的合约在前）
+    return contractsWithStartDates.sort(
+      (a, b) => b.expiry!.getTime() - a.expiry!.getTime()
+    );
   }
 
   /**
@@ -165,7 +232,7 @@ export class MESHistoricalDataFetcher {
             (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()
           );
           const oldestDataTime = sortedData[0]?.date
-            ? String(sortedData[0].date)
+            ? dayjs(sortedData[0].date).toISOString()
             : request.endDateTime;
 
           await this.metadataManager.updateContractProgress(
@@ -219,14 +286,38 @@ export class MESHistoricalDataFetcher {
 
     const symbol = contract.localSymbol || contract.symbol || "MES";
 
-    // 按时间排序（从旧到新）
+    // 按时间排序（从新到旧）
     const sortedData = data.sort(
       (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
     );
 
-    // 检查文件是否存在，如果不存在则创建并写入表头
+    // 检查文件是否存在，如果存在则读取现有数据进行去重
     const file = Bun.file(csvFilePath);
     const fileExists = await file.exists();
+    
+    let existingTimestamps = new Set<string>();
+    
+    if (fileExists) {
+      try {
+        const existingContent = await file.text();
+        const lines = existingContent.split('\n');
+        
+        // 跳过表头，提取现有的时间戳
+        for (let i = 1; i < lines.length; i++) {
+          const line = lines[i]?.trim();
+          if (line) {
+            const columns = line.split(',');
+            if (columns.length >= 2 && columns[1]) {
+              existingTimestamps.add(columns[1]); // 日期在第二列
+            }
+          }
+        }
+        
+        console.log(`📋 文件 ${csvFilePath} 已存在 ${existingTimestamps.size} 条记录`);
+      } catch (error) {
+        console.warn(`⚠️ 读取现有CSV文件失败: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
 
     let csvContent = "";
 
@@ -235,14 +326,23 @@ export class MESHistoricalDataFetcher {
       csvContent += "symbol,date,open,high,low,close,volume,count,wap\n";
     }
 
-    // 添加数据行
-    const csvRows = sortedData.map((item) => {
+    // 过滤重复数据并添加数据行
+    const newDataRows: string[] = [];
+    let duplicateCount = 0;
+    
+    for (const item of sortedData) {
       // 格式化日期为UTC+8时区的 YYYY-MM-DD HH:mm:ss 格式
       const formattedDate = dayjs(item.date)
         .utcOffset(8)
         .format("YYYY-MM-DD HH:mm:ss");
 
-      return [
+      // 检查是否重复
+      if (existingTimestamps.has(formattedDate)) {
+        duplicateCount++;
+        continue; // 跳过重复数据
+      }
+
+      const csvRow = [
         symbol,
         formattedDate,
         item.open,
@@ -253,9 +353,20 @@ export class MESHistoricalDataFetcher {
         item.count || 0,
         item.wap || item.close,
       ].join(this.config.output.csvSeparator);
-    });
+      
+      newDataRows.push(csvRow);
+    }
 
-    csvContent += csvRows.join("\n") + "\n";
+    if (duplicateCount > 0) {
+      console.log(`🔄 跳过 ${duplicateCount} 条重复数据`);
+    }
+    
+    if (newDataRows.length === 0) {
+      console.log(`ℹ️ 没有新数据需要写入 ${csvFilePath}`);
+      return;
+    }
+
+    csvContent += newDataRows.join("\n") + "\n";
 
     try {
       // 追加写入文件
@@ -266,7 +377,7 @@ export class MESHistoricalDataFetcher {
         await Bun.write(csvFilePath, csvContent);
       }
 
-      console.log(`💾 已保存 ${data.length} 条数据到 ${csvFilePath}`);
+      console.log(`💾 已保存 ${newDataRows.length} 条新数据到 ${csvFilePath}`);
     } catch (error) {
       console.error(`❌ 保存数据失败:`, error);
       throw error;
@@ -343,6 +454,11 @@ export class MESHistoricalDataFetcher {
 
     // 为每个合约初始化进度和生成请求
     for (const contractInfo of contracts) {
+      // 计算合约的有效时间范围
+      const contractStart = contractInfo.startDate;
+      const contractEnd = contractInfo.expiry;
+
+      // 确保不超过用户设置的历史年数限制
       const now = new Date();
       const yearsAgo = new Date(
         now.getFullYear() - this.config.dataFetch.historyYears,
@@ -350,9 +466,24 @@ export class MESHistoricalDataFetcher {
         now.getDate()
       );
 
+      // 使用合约开始时间和用户设置的历史限制中较晚的那个
+      const effectiveStartDate =
+        contractStart > yearsAgo ? contractStart : yearsAgo;
+
+      console.log(`📅 合约 ${contractInfo.contract.localSymbol}:`);
+      console.log(
+        `   - 合约时间范围: ${dayjs(contractStart).format(
+          "YYYY-MM-DD"
+        )} 到 ${dayjs(contractEnd).format("YYYY-MM-DD")}`
+      );
+      console.log(
+        `   - 实际获取范围: ${dayjs(effectiveStartDate).format(
+          "YYYY-MM-DD"
+        )} 到 ${dayjs(contractEnd).format("YYYY-MM-DD")}`
+      );
+
       // 生成CSV文件路径
-      const timestamp = dayjs().format("YYYYMMDD");
-      const csvFilePath = `${this.config.output.filenamePrefix}_${contractInfo.contract.localSymbol}_${timestamp}.csv`;
+      const csvFilePath = `${this.config.output.filenamePrefix}_${contractInfo.contract.localSymbol}.csv`;
 
       // 初始化合约进度
       const contractProgress = this.metadataManager.initContractProgress(
@@ -361,7 +492,7 @@ export class MESHistoricalDataFetcher {
           contractInfo.contract.symbol ||
           "MES",
         contractInfo.expiry,
-        dayjs(yearsAgo).toISOString(),
+        dayjs(effectiveStartDate).toISOString(),
         csvFilePath
       );
 
@@ -406,8 +537,7 @@ export class MESHistoricalDataFetcher {
 
     // 从元数据中获取下一个请求时间点
     let currentEndDateTime = this.metadataManager.getNextFetchDateTime(
-      contractInfo.conId,
-      this.config.dataFetch.maxDurationDays
+      contractInfo.conId
     );
 
     if (!currentEndDateTime) {
@@ -417,15 +547,23 @@ export class MESHistoricalDataFetcher {
 
     let currentEnd = dayjs(currentEndDateTime);
     const targetStart = dayjs(targetStartDate);
+    const contractStart = dayjs(contractInfo.startDate);
 
     console.log(
       `🔄 合约 ${contractProgress.symbol} 从 ${currentEndDateTime} 继续获取数据`
     );
+    console.log(`   - 合约开始时间: ${contractStart.format("YYYY-MM-DD")}`);
+    console.log(`   - 目标开始时间: ${targetStart.format("YYYY-MM-DD")}`);
+
+    // 使用合约开始时间和目标开始时间中较晚的那个
+    const effectiveStart = contractStart.isAfter(targetStart)
+      ? contractStart
+      : targetStart;
 
     // 生成请求序列，添加安全限制
     let requestCount = 0;
     while (
-      currentEnd.isAfter(targetStart) &&
+      currentEnd.isAfter(effectiveStart) &&
       requestCount < MAX_REQUESTS_PER_CONTRACT
     ) {
       const durationDays = this.config.dataFetch.maxDurationDays;

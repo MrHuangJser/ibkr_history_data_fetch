@@ -47,7 +47,7 @@ export const DEFAULT_CONFIG: MESFetcherConfig = {
   dataFetch: {
     maxRequestsPerMinute: 60,
     maxDurationDays: 7,
-    historyYears: 2,
+    historyYears: 3,
     includeAfterHours: true,
   },
 

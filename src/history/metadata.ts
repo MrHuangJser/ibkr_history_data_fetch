@@ -75,7 +75,11 @@ export class MetadataManager {
       const file = Bun.file(this.metadataFile);
       if (await file.exists()) {
         const content = JSON.parse(await file.text());
-        console.log(`📋 加载现有元数据: ${Object.keys(content.contracts || {}).length} 个合约`);
+        console.log(
+          `📋 加载现有元数据: ${
+            Object.keys(content.contracts || {}).length
+          } 个合约`
+        );
         return content;
       }
     } catch (error) {
@@ -100,7 +104,10 @@ export class MetadataManager {
   async saveMetadata(): Promise<void> {
     this.metadata.lastUpdated = dayjs().toISOString();
     try {
-      await Bun.write(this.metadataFile, JSON.stringify(this.metadata, null, 2));
+      await Bun.write(
+        this.metadataFile,
+        JSON.stringify(this.metadata, null, 2)
+      );
     } catch (error) {
       console.error("❌ 保存元数据失败:", error);
     }
@@ -109,14 +116,18 @@ export class MetadataManager {
   /**
    * 初始化会话
    */
-  async initSession(config: { historyYears: number; maxDurationDays: number; includeAfterHours: boolean }): Promise<void> {
+  async initSession(config: {
+    historyYears: number;
+    maxDurationDays: number;
+    includeAfterHours: boolean;
+  }): Promise<void> {
     // 确保元数据已加载
     if (!this.metadata.contracts) {
       await this.init();
     }
 
     // 如果配置发生变化，重置所有进度
-    const configChanged = 
+    const configChanged =
       this.metadata.config.historyYears !== config.historyYears ||
       this.metadata.config.maxDurationDays !== config.maxDurationDays ||
       this.metadata.config.includeAfterHours !== config.includeAfterHours;
@@ -141,7 +152,7 @@ export class MetadataManager {
     csvFilePath: string
   ): ContractProgress {
     const expiryStr = dayjs(expiry).toISOString();
-    
+
     if (!this.metadata.contracts[conId]) {
       this.metadata.contracts[conId] = {
         conId,
@@ -171,12 +182,18 @@ export class MetadataManager {
       this.metadata.contracts[conId].lastFetchedDateTime = lastFetchedDateTime;
       this.metadata.contracts[conId].totalRecords += recordCount;
       this.metadata.contracts[conId].lastUpdated = dayjs().toISOString();
-      
+
       // 检查是否已完成
       const progress = this.metadata.contracts[conId];
-      if (dayjs(progress.lastFetchedDateTime).isBefore(dayjs(progress.targetStartDateTime))) {
+      if (
+        dayjs(progress.lastFetchedDateTime).isBefore(
+          dayjs(progress.targetStartDateTime)
+        )
+      ) {
         progress.completed = true;
-        console.log(`✅ 合约 ${progress.symbol} 数据获取完成 (${progress.totalRecords} 条记录)`);
+        console.log(
+          `✅ 合约 ${progress.symbol} 数据获取完成 (${progress.totalRecords} 条记录)`
+        );
       }
 
       await this.saveMetadata();
@@ -187,13 +204,15 @@ export class MetadataManager {
    * 获取需要继续获取数据的合约列表
    */
   getPendingContracts(): ContractProgress[] {
-    return Object.values(this.metadata.contracts).filter(contract => !contract.completed);
+    return Object.values(this.metadata.contracts).filter(
+      (contract) => !contract.completed
+    );
   }
 
   /**
    * 获取合约的下一个请求时间点
    */
-  getNextFetchDateTime(conId: number, maxDurationDays: number): string | null {
+  getNextFetchDateTime(conId: number): string | null {
     const progress = this.metadata.contracts[conId];
     if (!progress || progress.completed) {
       return null;
@@ -201,7 +220,7 @@ export class MetadataManager {
 
     const lastFetched = dayjs(progress.lastFetchedDateTime);
     const targetStart = dayjs(progress.targetStartDateTime);
-    
+
     // 检查是否已经到达目标开始时间
     if (lastFetched.isBefore(targetStart) || lastFetched.isSame(targetStart)) {
       // 标记为完成
@@ -227,8 +246,8 @@ export class MetadataManager {
     const contracts = Object.values(this.metadata.contracts);
     return {
       totalContracts: contracts.length,
-      completedContracts: contracts.filter(c => c.completed).length,
-      pendingContracts: contracts.filter(c => !c.completed).length,
+      completedContracts: contracts.filter((c) => c.completed).length,
+      pendingContracts: contracts.filter((c) => !c.completed).length,
       totalRecords: contracts.reduce((sum, c) => sum + c.totalRecords, 0),
     };
   }
