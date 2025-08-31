@@ -102,14 +102,39 @@ class RateLimiter {
     );
   }
 
-  // 获取建议的等待时间
-  getWaitTime(contract: Contract, dateStr: string): number {
+  // 获取精确的全局等待时间
+  getOptimalGlobalWaitTime(): number {
+    const now = Date.now();
+    const windowSize = 600000; // 10分钟
+    const maxRequests = 50;
+
+    // 清理过期请求
+    this.globalRequestTimes = this.globalRequestTimes.filter(
+      (time) => now - time < windowSize
+    );
+
+    if (this.globalRequestTimes.length < maxRequests) {
+      return 0; // 未达到限制
+    }
+
+    // 找到最早的请求
+    const oldestRequest = Math.min(...this.globalRequestTimes);
+
+    // 计算精确等待时间
+    const timeUntilExpiry = windowSize - (now - oldestRequest);
+
+    // 添加小缓冲避免边界问题
+    return Math.max(0, timeUntilExpiry + 1000);
+  }
+
+  // 重写等待时间计算
+  getWaitTime(contract: Contract): number {
     const now = Date.now();
 
-    // 检查最小间隔
+    // 最小间隔等待
     const minWait = Math.max(0, 3000 - (now - this.lastRequestTime));
 
-    // 检查 2 秒窗口
+    // 合约等待（保持原逻辑）
     const contractKey = `${contract.localSymbol}-${contract.exchange}`;
     const contractAllRequests = Array.from(this.requestHistory.entries())
       .filter(([key]) => key.startsWith(contractKey))
@@ -118,8 +143,8 @@ class RateLimiter {
 
     const contractWait = contractAllRequests.length >= 5 ? 2000 : 0;
 
-    // 检查 10 分钟窗口
-    const globalWait = this.globalRequestTimes.length >= 50 ? 60000 : 0; // 等待 1 分钟
+    // 优化后的全局等待
+    const globalWait = this.getOptimalGlobalWaitTime();
 
     return Math.max(minWait, contractWait, globalWait);
   }
@@ -198,7 +223,7 @@ async function safeGetHistoricalData(
 ) {
   // 检查是否可以立即请求
   if (!rateLimiter.canMakeRequest(contract, dateStr)) {
-    const waitTime = rateLimiter.getWaitTime(contract, dateStr);
+    const waitTime = rateLimiter.getWaitTime(contract);
     if (waitTime > 0) {
       console.log(
         `等待 ${Math.ceil(waitTime / 1000)} 秒后请求 ${
@@ -288,41 +313,10 @@ export async function fetchHistoryData(
   console.log(`开始处理 ${totalCount} 个历史数据请求...`);
   console.log(`预计完成时间: ${Math.ceil((totalCount * 3) / 60)} 分钟`);
 
-  // 按合约分组以优化处理顺序
-  const groupedByContract = SPLICES_LIST.reduce((groups, item) => {
-    const key = `${item.contract.localSymbol}-${item.contract.exchange}`;
-    if (!groups[key]) {
-      groups[key] = [];
-    }
-    groups[key].push(item);
-    return groups;
-  }, {} as Record<string, typeof SPLICES_LIST>);
-
-  console.log(`发现 ${Object.keys(groupedByContract).length} 个不同的合约`);
-
-  // 创建处理队列，交替处理不同合约以避免单一合约频控
-  const processingQueue: typeof SPLICES_LIST = [];
-  const contractKeys = Object.keys(groupedByContract);
-  let maxLength = Math.max(
-    ...Object.values(groupedByContract).map((arr) => arr.length)
-  );
-
-  for (let i = 0; i < maxLength; i++) {
-    for (const contractKey of contractKeys) {
-      const contractItems = groupedByContract[contractKey];
-      if (contractItems && i < contractItems.length) {
-        const item = contractItems[i];
-        if (item) {
-          processingQueue.push(item);
-        }
-      }
-    }
-  }
-
-  console.log(`处理队列已创建，共 ${processingQueue.length} 个请求`);
+  console.log(`处理队列已创建，共 ${SPLICES_LIST.length} 个请求`);
 
   return new Promise((resolve, reject) => {
-    of(...processingQueue)
+    of(...SPLICES_LIST)
       .pipe(
         concatMap((item) => {
           // 动态调整延迟时间
