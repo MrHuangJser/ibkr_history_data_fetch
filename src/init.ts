@@ -213,9 +213,9 @@ function isQuarterlyContract(lastTradeDateOrContractMonth: string): boolean {
 function generateContractSplice(
   item: ContractWithTimes,
   sliceDuration: number,
-  sliceUnit: "minutes" | "hours" | "days"
+  sliceUnit: "minutes" | "hours" | "days" | "seconds"
 ) {
-  const startTime = dayjs(item.calculatedStartTime); // 转换为芝加哥时间
+  const startTime = dayjs(item.calculatedStartTime); 
   const endTime = dayjs(item.calculatedEndTime);
   const duration = endTime.diff(startTime, sliceUnit);
 
@@ -288,7 +288,7 @@ export async function init(options: InitOptions): Promise<void> {
 
   const list = contractsWithTimes
     .filter((item) => item.calculatedStartTime)
-    .map((item) => generateContractSplice(item, 1, "hours"))
+    .map((item) => generateContractSplice(item, 1800, "seconds"))
     .reduce((acc, item) => acc.concat(item), []);
   // 将list扁平化并写入到history_data/contract-list-splices.json
   await fs.ensureDir(path.join(process.cwd(), "history_data"));
